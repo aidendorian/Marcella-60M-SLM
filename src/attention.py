@@ -25,16 +25,16 @@ class Attention(Module):
         qkv = self.qkv(x)
         q, k, v = qkv.chunk(3, dim=-1)
         
-        k = self.k(x).view(B, N_HEADS, S, self.d_head).transpose(1, 2) 
-        v = self.v(x).view(B, N_HEADS, S, self.d_head).transpose(1, 2)
-        q = self.q(x).view(B, N_HEADS, S, self.d_head).transpose(1, 2)
-        
-        if self.cache is None:
+        k = k.view(B, S, N_HEADS, self.d_head).transpose(1, 2) 
+        v = v.view(B, S, N_HEADS, self.d_head).transpose(1, 2)
+        q = q.view(B, S, N_HEADS, self.d_head).transpose(1, 2)
+            
+        if kv_cache is None:
             out = scaled_dot_product_attention(query=q,
-                                            key=k,
-                                            value=v,
-                                            dropout_p=self.attn_dropout if self.training else 0.0,
-                                            is_causal=True)
+                                               key=k,
+                                               value=v,
+                                               dropout_p=self.attn_dropout if self.training else 0.0,
+                                               is_causal=True)
         else:
             if kv_cache.get("k") is not None:
                 k = torch.cat([kv_cache["k"], k], dim=2)
