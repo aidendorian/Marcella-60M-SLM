@@ -1,44 +1,44 @@
-import torch
-from torch.nn import LayerNorm, GELU, Module, Linear, Dropout
-from torch.optim import AdamW
+from torch import cat
+from torch.nn import Module, Linear, Dropout
 from torch.nn.functional import scaled_dot_product_attention
 
-N_HEADS = 12
-D_MODEL = 384
-VOCAB = 32000
-ATTN_DROPOUT = 0.1
-
 class Attention(Module):
-    def __init__(self, dropout, attn_dropout=ATTN_DROPOUT):
+    def __init__(self,
+                 embed_dim:int,
+                 num_heads:int,
+                 flash_attn_dropout:float,
+                 ln_dropout:float=0.1):
         super().__init__()
         
-        assert D_MODEL%N_HEADS == 0, f'D_MODEL: {D_MODEL} must be divisible by N_HEADS: {N_HEADS}'
+        assert embed_dim % num_heads == 0, f'D_MODEL: {embed_dim} must be divisible by N_HEADS: {num_heads}'
         
-        self.qkv = Linear(D_MODEL, 3*D_MODEL, bias=False)
-        self.d_head = D_MODEL // N_HEADS
-        self.attn_dropout = attn_dropout
-        self.linear = Linear(D_MODEL, D_MODEL, bias=False)
-        self.dropout = Dropout(dropout)
+        self.qkv = Linear(embed_dim, 3 * embed_dim, bias=False)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.d_head = embed_dim // num_heads
+        self.flash_attn_dropout = flash_attn_dropout
+        self.linear = Linear(embed_dim, embed_dim, bias=False)
+        self.ln_dropout = Dropout(ln_dropout)
         
     def forward(self, x, kv_cache):
         B, S, _ = x.shape
         qkv = self.qkv(x)
         q, k, v = qkv.chunk(3, dim=-1)
         
-        k = k.view(B, S, N_HEADS, self.d_head).transpose(1, 2) 
-        v = v.view(B, S, N_HEADS, self.d_head).transpose(1, 2)
-        q = q.view(B, S, N_HEADS, self.d_head).transpose(1, 2)
+        k = k.view(B, S, self.num_heads, self.d_head).transpose(1, 2) 
+        v = v.view(B, S, self.num_heads, self.d_head).transpose(1, 2)
+        q = q.view(B, S, self.num_heads, self.d_head).transpose(1, 2)
             
         if kv_cache is None:
             out = scaled_dot_product_attention(query=q,
                                                key=k,
                                                value=v,
-                                               dropout_p=self.attn_dropout if self.training else 0.0,
+                                               dropout_p=self.flash_attn_dropout if self.training else 0.0,
                                                is_causal=True)
         else:
             if kv_cache.get("k") is not None:
-                k = torch.cat([kv_cache["k"], k], dim=2)
-                v = torch.cat([kv_cache["v"], v], dim=2)
+                k = cat([kv_cache["k"], k], dim=2)
+                v = cat([kv_cache["v"], v], dim=2)
 
             kv_cache["k"] = k
             kv_cache["v"] = v
@@ -47,6 +47,6 @@ class Attention(Module):
             attn = attn.softmax(dim=-1)
             out = attn @ v
             
-        out = out.transpose(1, 2).contiguous().view(B, S, D_MODEL)
+        out = out.transpose(1, 2).contiguous().view(B, S, self.embed_dim)
         out = self.linear(out)
-        return self.dropout(out)
+        return self.ln_dropout(out)
