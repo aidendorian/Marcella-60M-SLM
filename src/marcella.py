@@ -45,7 +45,7 @@ class FeedForwardNetwork(Module):
 class Marcella(Module):
     def __init__(self,
                  vocab_size:int=32000,
-                 embed_dim:int=768,
+                 embed_dim:int=384,
                  num_transformer_layers:int=32,
                  num_heads:int=12,
                  attn_dropout:float=0.0,
@@ -54,7 +54,7 @@ class Marcella(Module):
         super().__init__()
         
         self.token_embed = Embedding(vocab_size, embed_dim)
-        self.lm_head = Linear(embed_dim, vocab_size)
+        self.lm_head = Linear(embed_dim, vocab_size, bias=False)
         self.transformer_blocks = ModuleList([
             TransformerBlock(embed_dim=embed_dim,
                              num_heads=num_heads,
