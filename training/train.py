@@ -1,23 +1,27 @@
 import torch
 from bitsandbytes.optim.adamw import AdamW8bit
 from tqdm import tqdm
-from config import Config
+from training.config import Config
 from torch.nn import CrossEntropyLoss
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 import os
-from dataloader import get_data
+from training.dataloader import get_data
 from src.marcella import Marcella
+from training.checkpoint import load_checkpoint, save_checkpoint
 
 config = Config()
 
+device = torch.device('cuda') if torch.cuda.is_available else torch.device('cpu')
+
 model = Marcella(vocab_size=config.vocab_size, 
                  embed_dim=config.embed_dim,
-                 num_transformer_layers=config.num_transformer_layers, 
+                 num_transformer_layers=config.num_transformer_layers,
                  num_heads=config.num_heads,
                  attn_dropout=config.attn_dropout,
                  ffn_dropout=config.ffn_dropout
-                 )
+                 ).to(device)
+
 
 optimizer = AdamW8bit(model.parameters(), lr=1e-4)
 
@@ -32,6 +36,28 @@ data = get_data(dataset_name=config.dataset_name,
                 persistent_workers=config.persistent_workers,
                 max_samples=config.max_samples)
 
-loss = CrossEntropyLoss()
+loss_fn = CrossEntropyLoss()
 
 scaler = GradScaler("cuda")
+
+RESUME_FROM_CHECKPOINT = False
+
+start_iter = 0
+
+### add Resume from Checkpoint
+
+for i, (x, y) in enumerate(tqdm(data, desc='Training')):
+    model.train()
+    if start_iter > i:
+        continue
+    x, y = x.to(device), y.to(device)
+    logits = model(x)
+    print(logits.shape)
+    print(y.shape)
+    loss = loss_fn(logits, y)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    
+    
