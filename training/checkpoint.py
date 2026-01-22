@@ -1,12 +1,11 @@
 import torch
 import os
 
-def save_checkpoint(model, optimizer, scaler, epoch, save_dir, filename, loss=None, iteration=None):
+def save_checkpoint(model, optimizer, scaler, save_dir, filename, loss=None, iteration=None):
     """Save complete training checkpoint with GradScaler"""
     os.makedirs(save_dir, exist_ok=True)
     
     checkpoint = {
-        'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scaler_state_dict': scaler.state_dict(),
@@ -37,8 +36,7 @@ def load_checkpoint(model, optimizer, scaler, checkpoint_path):
     if 'rng_state' in checkpoint:
         torch.set_rng_state(checkpoint['rng_state'])
     
-    epoch = checkpoint.get('epoch', 0)
     loss = checkpoint.get('loss', None)
     iteration = checkpoint.get('iteration', None)
     
-    return epoch, loss, model, optimizer, scaler, iteration
+    return loss, model, optimizer, scaler, iteration
