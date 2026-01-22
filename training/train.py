@@ -52,12 +52,10 @@ for i, (x, y) in enumerate(tqdm(data, desc='Training')):
         continue
     x, y = x.to(device), y.to(device)
     logits = model(x)
-    print(logits.shape)
-    print(y.shape)
+    B, T, C = logits.shape
+    logits = logits.view(B*T, C)
+    y = y.view(B*T)
     loss = loss_fn(logits, y)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    
-    
-    
