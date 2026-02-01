@@ -9,7 +9,6 @@
 * No gradient accumulation → batch=4 is too small for good optimization at this scale
 * No TF32 / allow reduced precision matmul → missing free speedup on Ada GPUs
 * ***GELU instead of modern GLU variants (SwiGLU / GeGLU) → 3–10% worse quality at same compute***
-* No Grouped-Query Attention (GQA) or MQA → very high KV cache memory during inference
 * Head dimension 32 is acceptable but on the low side → many recent small models prefer 48–64
 * 32 layers × 384 dim is relatively deep \& narrow → recent small-model scaling studies favor wider+shallower
 * **No weight tying between token\_embed and lm\_head → wastes ~25% of parameters**
