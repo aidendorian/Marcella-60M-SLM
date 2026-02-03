@@ -56,6 +56,7 @@ class Marcella(Module):
         
         self.token_embed = StableEmbedding(vocab_size, embed_dim)
         self.lm_head = Linear(embed_dim, vocab_size, bias=False)
+        self.lm_head.weight = self.token_embed.weight
         self.transformer_blocks = ModuleList([
             TransformerBlock(embed_dim=embed_dim,
                              num_heads=num_heads,

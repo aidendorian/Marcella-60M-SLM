@@ -11,7 +11,6 @@
 * ***GELU instead of modern GLU variants (SwiGLU / GeGLU) → 3–10% worse quality at same compute***
 * Head dimension 32 is acceptable but on the low side → many recent small models prefer 48–64
 * 32 layers × 384 dim is relatively deep \& narrow → recent small-model scaling studies favor wider+shallower
-* **No weight tying between token\_embed and lm\_head → wastes ~25% of parameters**
 * Validation prompt is never used → no qualitative generation sanity check during training
 * ***No torch.backends.cudnn.benchmark = True → potential 5–20% throughput loss***
 * Attention still uses manual matmul path when kv\_cache is present → much slower decode, higher memory vs SDPA
