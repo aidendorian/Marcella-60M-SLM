@@ -4,7 +4,7 @@ class Config:
         self.embed_dim = 384
         self.num_transformer_layers = 32
         self.num_heads = 12
-        self.attn_dropout = 0.0
+        self.attn_dropout = 0.05
         self.ffn_dropout = 0.1
         self.dataset_name = "draco976/wikipedia-bookcorpus"
         self.dataset_split = 'train'
