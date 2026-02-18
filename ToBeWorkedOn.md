@@ -1,7 +1,6 @@
 * No mixed precision training (autocast + GradScaler) → will OOM or be extremely slow on 6 GB VRAM
 * No gradient clipping → high risk of exploding gradients in small-model training
 * No learning rate warmup or scheduler (fixed LR=1e-4 forever) → poor convergence, instability likely
-* **Training forward call misses freqs\_cis argument → Attention receives None → no RoPE during pretraining**
 * No evaluation loop / perplexity monitoring during training → blind to whether model is improving or diverging
 * **No torch.compile usage → missing 15–30% speedup + potential memory reduction on PyTorch 2.3+**
 * No gradient accumulation → batch=4 is too small for good optimization at this scale
