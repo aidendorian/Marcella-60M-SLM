@@ -7,23 +7,24 @@ from torch.amp.autocast_mode import autocast
 import os
 from training.dataloader import get_data
 from src.marcella import Marcella
+from src.tokenizer import Tokenizer
+from src.attention import KV_Cache
 from training.checkpoint import load_checkpoint, save_checkpoint
 
-config = Config()
-device = torch.device('cuda') if torch.cuda.is_available else torch.device('cpu')
-print(f'Device: {device}')
+os.makedirs('checkpoints', exist_ok=True)
 
-os.mkdir('training/checkpoints', )
+config = Config()
+device = config.device
+print(f'Device: {device}')
 
 model = Marcella(vocab_size=config.vocab_size, 
                  embed_dim=config.embed_dim,
                  num_transformer_layers=config.num_transformer_layers,
                  num_heads=config.num_heads,
                  attn_dropout=config.attn_dropout,
-                 ffn_dropout=config.ffn_dropout
-                 ).to(device)
+                 ffn_dropout=config.ffn_dropout).to(device)
 
-assert model is not None
+tkn = Tokenizer()
 
 optimizer = AdamW8bit(model.parameters(), lr=1e-4)
 
@@ -32,13 +33,49 @@ data = get_data(dataset_name=config.dataset_name,
                 tkn_model=config.tkn_model,
                 block_size=config.block_size,
                 batch_size=config.batch_size,
-                num_workers=config.batch_size,
+                num_workers=config.num_workers,
                 pin_memory=config.pin_memory,
                 prefetch_factor=config.prefetch_factor,
                 persistent_workers=config.persistent_workers,
                 max_samples=config.max_samples)
 
 loss_fn = CrossEntropyLoss()
+
+@torch.no_grad()
+def validate(model, val_prompt, max_tokens, top_k):
+    model.eval()
+
+    input_ids = torch.tensor(tkn.encode(val_prompt), device=config.device).unsqueeze(0)
+
+    B, S = input_ids.shape
+    total_seq_len = S + max_tokens
+    
+    kv_cache = [
+        KV_Cache(
+            batch_size=B,
+            max_seq_len=total_seq_len
+        )
+        for _ in range(config.num_transformer_layers)
+    ]
+
+    generated = input_ids
+
+    with autocast(device_type="cuda", dtype=torch.bfloat16):
+        logits = model(input_ids, kv_cache)
+        
+        for _ in range(max_tokens):
+            next_token_logits = logits[:, -1, :]
+            if top_k is not None:
+                v, _ = torch.topk(next_token_logits, top_k)
+                next_token_logits[next_token_logits < v[:, [-1]]] = -float("inf")
+
+            probs = torch.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, 1)
+
+            generated = torch.cat([generated, next_token], dim=1)
+            logits = model(next_token, kv_cache)
+            
+    return tkn.decode(generated[0].tolist())
 
 RESUME_FROM_CHECKPOINT = False
 checkpoint_path = ''
@@ -49,22 +86,34 @@ if RESUME_FROM_CHECKPOINT:
     _, model, optimizer, start_iter = load_checkpoint(model, optimizer, checkpoint_path)
     print(f'Resuming Training from Iter: {start_iter} from {checkpoint_path}')
 
-for i, (x, y) in enumerate(tqdm(data, desc='Training')):
-    model.train()
+MAX_ITERS = 7500 + start_iter
+print(f'Starting Training from iter {start_iter}, to {MAX_ITERS}')
+
+loss = 0.
+steps = 0
+
+for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS)):
     if start_iter > i:
         continue
     
-    print(f'Starting Training from iter {i}')
+    model.train()
     
-    x, y = x.to(device), y.to(device)
-    logits = model(x)
-    B, T, C = logits.shape
-    logits = logits.view(B*T, C)
-    y = y.view(B*T)
-    loss = loss_fn(logits, y)
     optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    x, y = x.to(device), y.to(device)
+    with autocast(device_type=device.type, dtype=torch.bfloat16):
+        logits = model(x)
+        B, T, C = logits.shape
+        logits = logits.view(B*T, C)
+        loss += loss_fn(logits, y.view(B*T))
+    steps+=1
+
+    if steps==config.accumulation_steps:
+        steps = 0
+        loss = loss/config.accumulation_steps
+        loss.backward()
+        optimizer.step()
     
-    if i % 100000:
-        save_checkpoint(model, optimizer, 'training/checkpoints', f'{i}_marcella.pth', loss, i)
+    if i==MAX_ITERS-1:
+        with open('vaildation.txt', 'a') as file:
+            file.write(validate(model, config.validation_prompt, max_tokens=256, top_k=10)+'\n----------------------------\n')
+        save_checkpoint(model, optimizer, 'training/checkpoints', f'{i+1}_marcella.pth', loss, i+1)
