@@ -20,5 +20,5 @@ class Config:
         self.max_samples = None
         self.validation_prompt = 'I have no idea what you are doing and that makes two of us'
         self.device = torch.device('cuda')
-        self.max_seq_len = 512
+        self.max_seq_len = 1024
         self.accumulation_steps = 6

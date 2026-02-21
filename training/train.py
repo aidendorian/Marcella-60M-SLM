@@ -11,7 +11,7 @@ from src.tokenizer import Tokenizer
 from src.attention import KV_Cache
 from training.checkpoint import load_checkpoint, save_checkpoint
 
-os.makedirs('checkpoints', exist_ok=True)
+os.makedirs('training/checkpoints', exist_ok=True)
 
 config = Config()
 device = config.device
@@ -87,9 +87,7 @@ if RESUME_FROM_CHECKPOINT:
     print(f'Resuming Training from Iter: {start_iter} from {checkpoint_path}')
 
 MAX_ITERS = 300 + start_iter
-print(f'Starting Training from iter {start_iter}, to {MAX_ITERS}')
-
-loss = 0.
+print(f'Starting Training from iter {start_iter} to {MAX_ITERS}')
 
 for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS)):
     if start_iter > i:
@@ -103,15 +101,25 @@ for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS)):
         B, T, C = logits.shape
         logits = logits.view(B*T, C)
         loss = loss_fn(logits, y.view(B*T))
-    loss /= config.accumulation_steps
+    
+    loss = loss / config.accumulation_steps
     loss.backward()
 
-    if i+1%config.accumulation_steps:
+    if (i + 1) % config.accumulation_steps == 0:
         optimizer.step()
         optimizer.zero_grad()
     
-    if i==MAX_ITERS-1:
-        with open('training/vaildation.txt', 'a') as file:
-            file.write(validate(model, config.validation_prompt, max_tokens=256, top_k=10)+'\n----------------------------\n')
+    if i == MAX_ITERS - 1:
+        
+        validation_output = validate(model, config.validation_prompt, max_tokens=256, top_k=10)
+
+        with open('training/validation.txt', 'a') as file:
+            file.write(f"Iteration {i+1}:\n")
+            file.write(validation_output + '\n')
+            file.write('-' * 50 + '\n\n')
+        
         save_checkpoint(model, optimizer, 'training/checkpoints', f'{i+1}_chkpnt.pth', loss, i+1)
+        
+        print(f"\nValidation output:\n{validation_output}\n")
+        print(f"Checkpoint saved: training/checkpoints/{i+1}_chkpnt.pth")
         break

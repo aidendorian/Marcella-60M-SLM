@@ -110,9 +110,10 @@ class Attention(Module):
         self.flash_attn_dropout = flash_attn_dropout
         self.linear = Linear(embed_dim, embed_dim, bias=False)
         self.ln_dropout = Dropout(ln_dropout)
-        
+
+        rope_max_seq_len = config.max_seq_len*2
         sin, cos = precompute_freqs_cis(embed_dim//num_heads,
-                                        max_seq_len=config.max_seq_len,
+                                        max_seq_len=rope_max_seq_len,
                                         device=config.device)
         
         self.register_buffer("rope_sin", sin, persistent=False)
