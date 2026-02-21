@@ -9,7 +9,7 @@ config = Config()
 def precompute_freqs_cis(dim: int,
                          max_seq_len: int,
                          theta: float = 10000.0,
-                         device=None,
+                         device=config.device,
                          dtype=torch.bfloat16):
     
     freq_seq = torch.arange(0, dim, 2, device=device).float()
@@ -58,7 +58,7 @@ class KV_Cache:
                  max_seq_len=config.max_seq_len,
                  head_dim=config.embed_dim//config.num_heads):
         
-        self.k = torch.zeros(batch_size, num_heads, max_seq_len, head_dim, device=None, dtype=torch.bfloat16)
+        self.k = torch.zeros(batch_size, num_heads, max_seq_len, head_dim, device=config.device, dtype=torch.bfloat16)
         self.v = torch.zeros_like(self.k)
         self.cache_len = 0
         self.max_seq_len = max_seq_len
@@ -113,7 +113,7 @@ class Attention(Module):
         
         sin, cos = precompute_freqs_cis(embed_dim//num_heads,
                                         max_seq_len=config.max_seq_len,
-                                        device=None)
+                                        device=config.device)
         
         self.register_buffer("rope_sin", sin, persistent=False)
         self.register_buffer("rope_cos", cos, persistent=False)
@@ -132,17 +132,31 @@ class Attention(Module):
             k = apply_rope(k, self.rope_sin, self.rope_cos) # type: ignore
             
             out = scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.flash_attn_dropout if self.training else 0.0, is_causal=True)
+                q, k, v,
+                dropout_p=self.flash_attn_dropout if self.training else 0.0, 
+                is_causal=True
+            )
         else:
-            offset = kv_cache.get_len()
-            q, k = apply_rope_offset(q, k, self.rope_sin, self.rope_cos, offset)
-            kv_cache.update(k, v)
-            k_all, v_all = kv_cache.get_kv()
-            attn = (q @ k_all.transpose(-2, -1)) * (self.d_head ** -0.5)
-            attn = attn.softmax(dim=-1)
-            out = attn @ v_all
+            cache_len = kv_cache.get_len()
+            
+            if cache_len == 0:
+                q = apply_rope(q, self.rope_sin[:S], self.rope_cos[:S]) # type: ignore
+                k = apply_rope(k, self.rope_sin[:S], self.rope_cos[:S]) # type: ignore
 
-        out = out.transpose(1, 2).contiguous().view(B, S, self.embed_dim)
+                kv_cache.update(k, v)
+
+                out = scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=True)
+            else:
+                offset = cache_len
+                q, k = apply_rope_offset(q, k, self.rope_sin, self.rope_cos, offset)
+                
+                kv_cache.update(k, v)
+                k_all, v_all = kv_cache.get_kv()
+                
+                attn = (q @ k_all.transpose(-2, -1)) * (self.d_head ** -0.5)
+                attn = attn.softmax(dim=-1)
+                out = attn @ v_all
+                
+        out = out.transpose(1, 2).contiguous().view(B, -1, self.embed_dim)
         out = self.linear(out)
         return self.ln_dropout(out)
