@@ -2,7 +2,19 @@ from torch.nn import LayerNorm, GELU, Module, Linear, Dropout, ModuleList
 from src.attention import Attention, KV_Cache
 from bitsandbytes.nn.modules import StableEmbedding
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
+class RMSNorm(Module):
+    def __init__(self,embed_dim: int):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(embed_dim))
+        self.eps = 1e-6
+
+    def forward(self,x):
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True)+ self.eps)
+        return (x/rms)*self.weight
+    
 class TransformerBlock(Module):
     def __init__(self,
                  embed_dim:int,
@@ -12,11 +24,11 @@ class TransformerBlock(Module):
         
         super().__init__()
         
-        self.norm1 = LayerNorm(embed_dim)
+        self.norm1 = RMSNorm(embed_dim)
         self.attn = Attention(embed_dim=embed_dim,
                               num_heads=num_heads,
                               flash_attn_dropout=attn_dropout)
-        self.norm2 = LayerNorm(embed_dim)
+        self.norm2 = RMSNorm(embed_dim)
         self.ffn = FeedForwardNetwork(embed_dim=embed_dim,
                                       dropout=ffn_dropout)
         
@@ -33,16 +45,16 @@ class FeedForwardNetwork(Module):
                  dropout:float):
         super().__init__()
 
-        self.layer1 = Linear(embed_dim, 4 * embed_dim, bias=False)
-        self.act = GELU()
-        self.layer2 = Linear(4 * embed_dim, embed_dim, bias=False)
+        hidden_dim = int(embed_dim* 4 * 2 / 3)
+
+        self.gate_proj = Linear(embed_dim, hidden_dim,bias=False)
+        self.up_proj = Linear(embed_dim, hidden_dim,bias=False)
+        self.down_proj = Linear(hidden_dim, embed_dim,bias=False)
         self.dropout = Dropout(dropout)
 
     def forward(self, x):
-        x = self.layer1(x)
-        x = self.act(x)
-        x = self.layer2(x)
-        return self.dropout(x)
+        swiglu = self.down_proj(F.silu(self.gate_proj(x))*self.up_proj(x))
+        return self.dropout(swiglu)
 
 class Marcella(Module):
     def __init__(self,
@@ -65,7 +77,7 @@ class Marcella(Module):
                              attn_dropout=attn_dropout)
             for _ in range(num_transformer_layers)
         ])
-        self.norm = LayerNorm(embed_dim)
+        self.norm = RMSNorm(embed_dim)
         self.num_heads = num_heads
         self.head_dim = embed_dim//num_heads
         
