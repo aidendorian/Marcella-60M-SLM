@@ -1,20 +1,9 @@
-from torch.nn import LayerNorm, GELU, Module, Linear, Dropout, ModuleList
+from torch.nn import RMSNorm, Module, Linear, Dropout, ModuleList
 from src.attention import Attention, KV_Cache
 from bitsandbytes.nn.modules import StableEmbedding
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-class RMSNorm(Module):
-    def __init__(self,embed_dim: int):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(embed_dim))
-        self.eps = 1e-6
-
-    def forward(self,x):
-        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True)+ self.eps)
-        return (x/rms)*self.weight
-    
 class TransformerBlock(Module):
     def __init__(self,
                  embed_dim:int,
@@ -45,7 +34,7 @@ class FeedForwardNetwork(Module):
                  dropout:float):
         super().__init__()
 
-        hidden_dim = int(embed_dim* 4 * 2 / 3)
+        hidden_dim = int(embed_dim * 4 * 2 / 3)
 
         self.gate_proj = Linear(embed_dim, hidden_dim,bias=False)
         self.up_proj = Linear(embed_dim, hidden_dim,bias=False)
