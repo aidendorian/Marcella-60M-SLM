@@ -11,6 +11,9 @@ class Tokenizer:
         self.tokenizer.Load(model_file=tokenizer_model)
         self.num_words = self.tokenizer.vocab_size()
         self.unk_id = self.tokenizer.unk_id()
+        self.bos_id = self.tokenizer.bos_id()
+        self.eos_id = self.tokenizer.eos_id()
+        self.pad_id = self.tokenizer.pad_id()
         
     def encode(self,
                sentence:str) -> List[int]:

@@ -32,33 +32,53 @@ tkn = Tokenizer()
 
 optimizer = AdamW8bit(model.parameters(), lr=1e-4)
 
-data = get_data(dataset_name=config.dataset_name,
-                dataset_split=config.dataset_split,
-                tkn_model=config.tkn_model,
-                block_size=config.block_size,
-                batch_size=config.batch_size,
-                num_workers=config.num_workers,
-                pin_memory=config.pin_memory,
-                prefetch_factor=config.prefetch_factor,
-                persistent_workers=config.persistent_workers,
-                max_samples=config.max_samples)
+start_iter = 0
+
+RESUME_FROM_CHECKPOINT = True
+checkpoint_path = 'training/checkpoints/15000_chkpnt.pth'
+
+resume_chunks = 0
+
+if RESUME_FROM_CHECKPOINT:
+    _, model, optimizer, start_iter, resume_chunks = load_checkpoint(model, optimizer, checkpoint_path)
+    data, text_data = get_data(dataset_name=config.dataset_name,
+                               dataset_split=config.dataset_split,
+                               tkn_model=config.tkn_model,
+                               block_size=config.block_size,
+                               batch_size=config.batch_size,
+                               num_workers=config.num_workers,
+                               pin_memory=config.pin_memory,
+                               prefetch_factor=config.prefetch_factor,
+                               persistent_workers=config.persistent_workers,
+                               max_samples=config.max_samples,
+                               resume_chunks=resume_chunks)
+    
+    print(f'Resuming Training from Iter: {start_iter} from {checkpoint_path}')
+else:
+    data, text_data = get_data(dataset_name=config.dataset_name,
+                               dataset_split=config.dataset_split,
+                               tkn_model=config.tkn_model,
+                               block_size=config.block_size,
+                               batch_size=config.batch_size,
+                               num_workers=config.num_workers,
+                               pin_memory=config.pin_memory,
+                               prefetch_factor=config.prefetch_factor,
+                               persistent_workers=config.persistent_workers,
+                               max_samples=config.max_samples)
 
 loss_fn = CrossEntropyLoss()
 
 @torch.no_grad()
 def validate(model, val_prompt, max_tokens, top_k):
     model.eval()
+    eos_id = tkn.eos_id
 
     input_ids = torch.tensor(tkn.encode(val_prompt), device=config.device).unsqueeze(0)
-
     B, S = input_ids.shape
     total_seq_len = S + max_tokens
-    
+
     kv_cache = [
-        KV_Cache(
-            batch_size=B,
-            max_seq_len=total_seq_len
-        )
+        KV_Cache(batch_size=B, max_seq_len=total_seq_len)
         for _ in range(config.num_transformer_layers)
     ]
 
@@ -66,7 +86,7 @@ def validate(model, val_prompt, max_tokens, top_k):
 
     with autocast(device_type="cuda", dtype=torch.bfloat16):
         logits = model(input_ids, kv_cache)
-        
+
         for _ in range(max_tokens):
             next_token_logits = logits[:, -1, :]
             if top_k is not None:
@@ -76,26 +96,18 @@ def validate(model, val_prompt, max_tokens, top_k):
             probs = torch.softmax(next_token_logits, dim=-1)
             next_token = torch.multinomial(probs, 1)
 
+            if next_token.item() == eos_id:
+                break
+
             generated = torch.cat([generated, next_token], dim=1)
             logits = model(next_token, kv_cache)
-            
+
     return tkn.decode(generated[0].tolist())
-
-RESUME_FROM_CHECKPOINT = True
-checkpoint_path = 'training/checkpoints/88500_chkpnt.pth'
-
-start_iter = 0
-
-if RESUME_FROM_CHECKPOINT:
-    _, model, optimizer, start_iter = load_checkpoint(model, optimizer, checkpoint_path)
-    print(f'Resuming Training from Iter: {start_iter} from {checkpoint_path}')
 
 MAX_ITERS = 15000 + start_iter
 print(f'Starting Training from iter {start_iter} to {MAX_ITERS}')
 
-for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS)):
-    if start_iter > i:
-        continue
+for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS), start=start_iter):
     
     model.train()
     
@@ -122,7 +134,7 @@ for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS)):
             file.write(validation_output + '\n')
             file.write('-' * 50 + '\n\n')
         
-        save_checkpoint(model, optimizer, 'training/checkpoints', f'{i+1}_chkpnt.pth', loss, i+1)
+        save_checkpoint(model, optimizer, 'training/checkpoints', f'{i+1}_chkpnt.pth', loss, i+1, chunks_yielded=resume_chunks + text_data.chunks_yielded)
         
         print(f"\nValidation output:\n{validation_output}\n")
         print(f"Checkpoint saved: training/checkpoints/{i+1}_chkpnt.pth")

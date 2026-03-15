@@ -13,10 +13,10 @@ class Config:
         self.tkn_model = 'models/Marcella_vocab_32K.model'
         self.block_size = 512
         self.batch_size = 6
-        self.num_workers = 4
-        self.pin_memory = True
-        self.prefetch_factor = 2
-        self.persistent_workers = True
+        self.num_workers = 0
+        self.pin_memory = False
+        self.prefetch_factor = None
+        self.persistent_workers = False
         self.max_samples = None
         self.validation_prompt = "The Moon has this magical creature on it's surface called"
         self.device = torch.device('cuda')
