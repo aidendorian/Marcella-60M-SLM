@@ -1,7 +1,10 @@
 import torch
+import math
+from torch.optim import lr_scheduler
 from bitsandbytes.optim.adamw import AdamW8bit
 from tqdm import tqdm
 from training.config import Config
+from torch.nn.utils import clip_grad_norm_
 from torch.nn import CrossEntropyLoss
 from torch.amp.autocast_mode import autocast
 import os
@@ -30,7 +33,24 @@ model = Marcella(vocab_size=config.vocab_size,
 
 tkn = Tokenizer()
 
-optimizer = AdamW8bit(model.parameters(), lr=1e-4)
+no_decay = {"bias", "rmsnorm.weight"}
+
+param_groups = [
+    {"params": [p for n, p in model.named_parameters()
+                if not any(nd in n for nd in no_decay)]},
+    {"params": [p for n, p in model.named_parameters()
+                if any(nd in n for nd in no_decay)]},
+]
+
+optimizer = AdamW8bit(param_groups, lr=config.LR_MAX, betas=(0.9, 0.95), eps=1e-8)
+
+def lr_lambda(step:int) -> float:
+    if step < config.WARMUP_STEPS:
+        return step/config.WARMUP_STEPS
+    t= step - config.WARMUP_STEPS
+    cosine = 0.5 * (1.0+math.cos(math.pi*t / config.T_MAX))
+    lr = config.LR_MIN + (config.LR_MAX - config.LR_MIN) * cosine
+    return lr / config.LR_MAX
 
 start_iter = 0
 
@@ -65,6 +85,12 @@ else:
                                prefetch_factor=config.prefetch_factor,
                                persistent_workers=config.persistent_workers,
                                max_samples=config.max_samples)
+
+scheduler = lr_scheduler.LambdaLR(
+    optimizer,
+    lr_lambda = lr_lambda,
+    last_epoch = start_iter - 1
+)
 
 loss_fn = CrossEntropyLoss()
 
@@ -117,12 +143,13 @@ for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS), start=s
         B, T, C = logits.shape
         logits = logits.view(B*T, C)
         loss = loss_fn(logits, y.view(B*T))
-    
-    loss = loss / config.accumulation_steps
+        loss = loss / config.accumulation_steps
     loss.backward()
 
     if (i + 1) % config.accumulation_steps == 0:
+        clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step()
         optimizer.zero_grad()
     
     if i == MAX_ITERS - 1:

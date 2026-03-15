@@ -22,3 +22,8 @@ class Config:
         self.device = torch.device('cuda')
         self.max_seq_len = 1024
         self.accumulation_steps = 6
+        self.TOTAL_STEPS = 244_140
+        self.WARMUP_STEPS = 2_441
+        self.T_MAX = self.TOTAL_STEPS - self.WARMUP_STEPS
+        self.LR_MAX = 2e-4
+        self.LR_MIN = 2e-5
