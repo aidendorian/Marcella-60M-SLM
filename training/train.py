@@ -184,7 +184,7 @@ for i, (x, y) in enumerate(
     with autocast(device_type=device.type, dtype=torch.bfloat16):
         logits = model(x)
         B, T, C = logits.shape
-        logits = logits.view(B * T, C)
+        logits = logits.view(B*T,C)
         loss = loss_fn(logits, y.view(B * T))
         loss = loss / config.accumulation_steps
     loss.backward()
