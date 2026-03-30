@@ -37,12 +37,17 @@ model = Marcella(vocab_size=config.vocab_size,
 
 tkn = Tokenizer(tokenizer_model=config.tkn_model)
 
-no_decay = {"bias", "rmsnorm.weight"}
+no_decay = {"bias", "norm"}
 param_groups = [
-    {"params": [p for n, p in model.named_parameters()
-                if not any(nd in n for nd in no_decay)]},
-    {"params": [p for n, p in model.named_parameters()
-                if any(nd in n for nd in no_decay)]},
+    {
+        "params": [p for n, p in model.named_parameters() 
+                   if not any(nd in n for nd in no_decay)],
+        "weight_decay": 0.1},
+    {
+        "params": [p for n, p in model.named_parameters() 
+                   if any(nd in n for nd in no_decay)],
+        "weight_decay": 0.0
+    },
 ]
 
 optimizer = AdamW8bit(param_groups, lr=config.LR_MAX, betas=(0.9, 0.95), eps=1e-8)
@@ -55,18 +60,25 @@ def lr_lambda(step: int) -> float:
     lr = config.LR_MIN + (config.LR_MAX - config.LR_MIN) * cosine
     return lr / config.LR_MAX
 
-start_iter    = 0
-start_shard   = 0
-start_seq     = 0
-wandb_run_id  = None
+start_iter = 0
+start_shard = 0
+start_seq = 0
+wandb_run_id = None
 
-RESUME_FROM_CHECKPOINT = False
-checkpoint_path = 'training/checkpoints/15000_chkpnt.pth'
+RESUME_FROM_CHECKPOINT = True
+checkpoint_path = 'training/checkpoints/180000_chkpnt.pth'
+
+scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 if RESUME_FROM_CHECKPOINT:
-    _, model, optimizer, start_iter, start_shard, start_seq, wandb_run_id = load_checkpoint(model, optimizer, checkpoint_path)
-    print(f'Resuming from iter {start_iter}, '
-          f'shard {start_shard}, seq {start_seq}')
+    _, model, optimizer, scheduler, start_iter, start_shard, start_seq, wandb_run_id = \
+    load_checkpoint(model, optimizer, scheduler, checkpoint_path)
+    print(f'Resuming from iter {start_iter}, shard {start_shard}, seq {start_seq}')
+    print(f'Scheduler at step: {scheduler.last_epoch}')
+    print(f'Current LR: {scheduler.get_last_lr()[0]:.2e}')
+
+torch._dynamo.config.suppress_errors = True
+compiled_model = torch.compile(model, mode="default")
 
 data, text_data = get_data(data_dir=config.data_dir,
                            block_size=config.block_size,
@@ -83,45 +95,43 @@ val_x, val_y = get_val_batch(data_dir=config.data_dir,
                              batch_size=config.batch_size,
                              device=device)
 
-scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda, last_epoch=start_iter - 1)
 loss_fn = CrossEntropyLoss()
 
 run = wandb.init(
     project=os.getenv('WANDB_PROJECT'),
     entity=os.getenv('WANDB_ENTITY'),
     id=wandb_run_id,
-    resume="allow",
+    resume="must" if wandb_run_id else None,
     reinit=False,
     config={
-        "vocab_size":         config.vocab_size,
-        "embed_dim":          config.embed_dim,
-        "num_layers":         config.num_transformer_layers,
-        "num_heads":          config.num_heads,
-        "block_size":         config.block_size,
-        "batch_size":         config.batch_size,
+        "vocab_size": config.vocab_size,
+        "embed_dim": config.embed_dim,
+        "num_layers": config.num_transformer_layers,
+        "num_heads": config.num_heads,
+        "block_size": config.block_size,
+        "batch_size": config.batch_size,
         "accumulation_steps": config.accumulation_steps,
-        "lr_max":             config.LR_MAX,
-        "lr_min":             config.LR_MIN,
-        "warmup_steps":       config.WARMUP_STEPS,
-        "t_max":              config.T_MAX,
-        "resume_from":        checkpoint_path if RESUME_FROM_CHECKPOINT else None,
+        "total_steps": config.TOTAL_STEPS,
+        "warmup_steps": config.WARMUP_STEPS,
+        "lr_max": config.LR_MAX,
+        "lr_min": config.LR_MIN,
+        "resume_from": checkpoint_path if RESUME_FROM_CHECKPOINT else None,
     },
 )
 
 wandb_run_id = run.id
 
-
 @torch.no_grad()
-def compute_val_loss(model, val_x, val_y):
-    model.eval()
+def compute_val_loss(val_x, val_y):
+    compiled_model.eval() # type: ignore
     with autocast(device_type="cuda", dtype=torch.bfloat16):
-        logits = model(val_x)
+        logits = compiled_model(val_x)
         B, T, C = logits.shape
         loss = loss_fn(logits.view(B * T, C), val_y.view(B * T))
     return loss.item()
 
 @torch.no_grad()
-def validate(model, val_prompt, max_tokens, top_k, temperature=0.8, rep_penalty=1.3):
+def validate(val_prompt, max_tokens, top_k, temperature=0.8, rep_penalty=1.3):
     model.eval()
     eos_id = tkn.eos_id
 
@@ -167,24 +177,21 @@ def validate(model, val_prompt, max_tokens, top_k, temperature=0.8, rep_penalty=
 
     return tkn.decode(generated[0].tolist())
 
-
-MAX_ITERS = 15000 + start_iter
+MAX_ITERS = start_iter + 60000 # MAX -> 488K
 print(f'Starting from iter {start_iter} to {MAX_ITERS}')
+print(f'Total optimizer steps: {MAX_ITERS // config.accumulation_steps}')
 
 tokens_per_iter = config.block_size * config.batch_size
 step_start_time = time.time()
 
-for i, (x, y) in enumerate(
-    tqdm(data, desc='Training', total=MAX_ITERS, initial=start_iter),
-    start=start_iter
-):
-    model.train()
-
+for i, (x, y) in enumerate(tqdm(data, desc='Training', total=MAX_ITERS, initial=start_iter), start=start_iter):
+    
+    compiled_model.train() # type: ignore
     x, y = x.to(device), y.to(device)
     with autocast(device_type=device.type, dtype=torch.bfloat16):
-        logits = model(x)
+        logits = compiled_model(x)
         B, T, C = logits.shape
-        logits = logits.view(B*T,C)
+        logits = logits.view(B * T, C)
         loss = loss_fn(logits, y.view(B * T))
         loss = loss / config.accumulation_steps
     loss.backward()
@@ -196,42 +203,48 @@ for i, (x, y) in enumerate(
         optimizer.zero_grad()
 
     if (i + 1) % 100 == 0:
-        elapsed      = time.time() - step_start_time
+        elapsed = time.time() - step_start_time
         toks_per_sec = (tokens_per_iter * 100) / elapsed
-        train_loss   = loss.item() * config.accumulation_steps
-        perplexity   = math.exp(min(train_loss, 20))
+        train_loss = loss.item() * config.accumulation_steps
+        perplexity = math.exp(min(train_loss, 20))
 
         run.log({
-            "train/loss":           train_loss,
-            "train/perplexity":     perplexity,
+            "train/loss": train_loss,
+            "train/perplexity": perplexity,
             "train/tokens_per_sec": toks_per_sec,
-            "train/lr":             scheduler.get_last_lr()[0],
-        }, step=i)
+            "train/lr": scheduler.get_last_lr()[0],
+            "train/optimizer_step": (i + 1) // config.accumulation_steps,
+        }, step=i + 1)
 
         step_start_time = time.time()
 
     if (i + 1) % 2000 == 0:
-        val_loss       = compute_val_loss(model, val_x, val_y)
+        val_loss = compute_val_loss(val_x, val_y)
         val_perplexity = math.exp(min(val_loss, 20))
 
         run.log({
-            "val/loss":       val_loss,
+            "val/loss": val_loss,
             "val/perplexity": val_perplexity,
-        }, step=i)
+        }, step=i + 1)
 
-    if (i + 1) % 5000 == 0 and i != MAX_ITERS - 1:
+    if (i + 1) % 5000 == 0 and (i + 1) % config.accumulation_steps == 0:
         save_checkpoint(
-            model, optimizer, 'training/checkpoints', f'{i+1}_chkpnt.pth',
+            model, optimizer, scheduler,
+            'training/checkpoints', f'{i+1}_chkpnt.pth',
             loss, i + 1,
             shard_id=text_data.current_shard,
             seq_idx=text_data.current_seq,
             wandb_run_id=run.id,
         )
-        print(f"Checkpoint saved: training/checkpoints/{i+1}_chkpnt.pth")
+        print(f"\nCheckpoint saved: training/checkpoints/{i+1}_chkpnt.pth")
 
-    if i == MAX_ITERS - 1:
+    if i + 1 == MAX_ITERS:
+        print("\n" + "="*60)
+        print("Training complete! Running final validation...")
+        print("="*60)
+        
         validation_output = validate(
-            model, config.validation_prompt,
+            config.validation_prompt,
             max_tokens=256, top_k=50,
             temperature=0.8, rep_penalty=1.3
         )
@@ -239,10 +252,11 @@ for i, (x, y) in enumerate(
         with open('training/validation.txt', 'a') as file:
             file.write(f"Iteration {i+1}:\n")
             file.write(validation_output + '\n')
-            file.write('-' * 50 + '\n\n')
+            file.write('-' * 60 + '\n\n')
 
         save_checkpoint(
-            model, optimizer, 'training/checkpoints', f'{i+1}_chkpnt.pth',
+            model, optimizer, scheduler,
+            'training/checkpoints', f'{i+1}_final.pth',
             loss, i + 1,
             shard_id=text_data.current_shard,
             seq_idx=text_data.current_seq,
@@ -251,10 +265,10 @@ for i, (x, y) in enumerate(
 
         run.log({
             "val/generation": wandb.Html(f"<pre>{validation_output}</pre>")
-        }, step=i)
+        }, step=i + 1)
 
         print(f"\nValidation output:\n{validation_output}\n")
-        print(f"Checkpoint saved: training/checkpoints/{i+1}_chkpnt.pth")
+        print(f"Final checkpoint saved: training/checkpoints/{i+1}_final.pth")
         break
 
 run.finish()
