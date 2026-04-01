@@ -17,3 +17,6 @@ test.ipynb
 checkpoints
 validation.txt
 wandb
+
+ui/node_modules
+ui/package-lock.json
