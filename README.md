@@ -17,6 +17,8 @@
 
 Marcella is a ~60M parameter decoder-only transformer language model trained from scratch using PyTorch. The architecture draws from modern LLM design: RoPE positional embeddings, RMSNorm, SwiGLU FFN, weight-tied embeddings, and a custom per-layer KV cache for inference. Everything — tokenizer, data pipeline, training loop, and model — is built from scratch.
 
+Our reliance over Large Language Models and the ridiculous compute it requires to run such models is absurd. Maybe if we shift to smaller, specialized models - models that can be run locally, inexpensively and efficiently. Starting with small chatbots, basic tool calling, domain specific models, small scale decision making or any such tasks that doesn't require a Large Language Model but we call them regardless, those must be replaced.
+
 ---
 
 ## Architecture
@@ -143,8 +145,8 @@ Evaluated on a held-out tail split (shards 40+, 1,140 sequences):
 | Eval tokens | 1,164,288 |
 | Loss | 3.4925 |
 | Perplexity | 32.87 |
-| Eval throughput | 167,259 tokens/sec |
-| Generation speed | ~22.8 tokens/sec |
+| Eval throughput | 278,943.9 tokens/sec |
+| Generation speed | ~40 tokens/sec |
 
 ---
 
@@ -168,7 +170,18 @@ MARCELLA-60M/
 │   ├── dataloader.py     # Sharded streaming dataset + resume
 │   ├── train.py          # Training loop
 │   └── validation.txt
+├── ui/
+│   ├── public/
+│   │   └── light.png
+│   ├── src/
+│   │   ├── App.svelte
+│   │   └── mian.js
+│   ├── index.html
+│   ├── package.json
+│   └── vite.config.js
+├── app.py
 ├── dark.png
+├── light.png
 ├── pyproject.toml
 └── uv.lock
 ```
